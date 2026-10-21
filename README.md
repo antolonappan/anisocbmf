@@ -5,6 +5,11 @@ spectra, applies a common anisotropic rotation, then channel miscalibration,
 beam smoothing, and white noise. `test.ipynb` compares single-frequency spectra
 with analytical predictions.
 
+`test_reconstruction.ipynb` runs an eight-realization signal and zero-rotation
+control test of `AlphaRecon`, with input cross-spectra, auto-spectra, estimated
+N0, and a Wiener-filtered map comparison. Parameters are editable at the top;
+generated reconstruction caches stay under `data/`.
+
 ## Polarization rotation reconstruction
 
 Requires NumPy, healpy, CAMB (for the first spectra calculation), and a working
