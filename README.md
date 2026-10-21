@@ -21,6 +21,21 @@ axes. Negative measured bands are explicitly marked as negative magnitudes.
 one fixed, seeded miscalibration angle per channel, drawn uniformly from
 0.1–0.2 degrees. It defaults to `nside=128` for a quick end-to-end run.
 
+`test_masked_reconstruction.ipynb` compares a single masked channel with
+`alpha=None` versus `alpha=0.2` degrees, keeping the spatial rotation and
+realization seeds fixed. It uses `nside=512` and `lmax_ivf=lmax_qlm=1024`.
+Place the supplied `binary_GAL_mask_N1024.fits` in the repository root:
+field 2 (the third FITS column) is downgraded to 512 with fractional edges.
+This local input file is not bundled with the code.
+
+Pass `mask='binary_GAL_mask_N1024.fits', mask_field=2` to `CMBobs`, or supply
+a RING HEALPix weight array. The mask multiplies T/Q/U after beam smoothing
+and noise. `noise_map` includes that mask by default; `apply_mask=False`
+returns the underlying full-sky noise. Mask content is included in cache
+identities. The current isotropic filter is unchanged: masked reconstructions
+are diagnostics without a cut-sky response, mean-field subtraction, or
+mode-coupling correction. No automatic sky-fraction rescaling is applied.
+
 ## Polarization rotation reconstruction
 
 Requires NumPy, healpy, CAMB (for the first spectra calculation), and a working

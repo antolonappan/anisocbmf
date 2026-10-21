@@ -66,14 +66,30 @@ class CMBobs:
 
     Maps contain T, Q, U in uK in HEALPix RING order. The simulation uses
     lmax = min(3*nside - 1, 6000), with no pixel window applied.
+    mask may be a FITS path (mask_field=2 by default) or a RING HEALPix array.
+    It is resampled to nside with hp.ud_grade (fractional edges retained)
+    and multiplies all T/Q/U channels after beam convolution and noise.
     """
 
-    def __init__(self, nside, nlevp, fwhm, alpha=None, Acb=0.0):
+    def __init__(self, nside, nlevp, fwhm, alpha=None, Acb=0.0,
+                 mask=None, mask_field=2):
         if (isinstance(nside, bool) or not isinstance(nside, Integral)
                 or not hp.isnsideok(nside)):
             raise ValueError("nside must be a valid positive HEALPix integer")
         self.nside = int(nside)
         self.npix = hp.nside2npix(self.nside)
+        # Masks are dimensionless RING weights, applied only after the noise.
+        # FITS inputs are read in RING order; array inputs must already be RING.
+        self.mask = None
+        if mask is not None:
+            values = (hp.read_map(str(mask), field=mask_field, dtype=float)
+                      if isinstance(mask, (str, Path)) else np.asarray(mask, dtype=float))
+            if (values.ndim != 1 or not hp.isnpixok(values.size)
+                    or not np.isfinite(values).all() or np.any(values < 0)
+                    or np.any(values > 1) or not np.any(values > 0)):
+                raise ValueError('mask must be a nonempty HEALPix map with weights in [0, 1]')
+            self.mask = hp.ud_grade(values, self.nside, order_in='RING', order_out='RING')
+            self._mask_hash = hashlib.sha256(self.mask.tobytes()).hexdigest()
         self.lmax = min(3 * self.nside - 1, 6000)
         amplitude = np.asarray(0.0 if Acb is None else Acb, dtype=float)
         if amplitude.ndim != 0 or not np.isfinite(amplitude) or amplitude < 0:
@@ -198,23 +214,31 @@ class CMBobs:
                     sky, fwhm=np.deg2rad(self.fwhm[channel] / 60),
                     pol=True, lmax=self.lmax,
                 )
-            maps[channel] = sky + self.noise_map(idx, channel)
+            maps[channel] = sky + self.noise_map(idx, channel, apply_mask=False)
+        if self.mask is not None:
+            maps *= self.mask
         return maps
 
-    def noise_map(self, idx, channel=None):
+    def noise_map(self, idx, channel=None, apply_mask=True):
         """Return the exact white noise added by observedmap, in uK.
 
         Shape is (nfreq, 3, npix), or (3, npix) if channel is specified.
-        Noise is neither rotated nor beam-convolved.
+        Noise is neither rotated nor beam-convolved. By default it includes
+        the final mask, matching the noise in observedmap. apply_mask=False
+        exposes the underlying full-sky noise without applying the mask twice.
         """
         idx = self._validate_idx(idx)
         if channel is None:
-            return np.stack([self.noise_map(idx, i) for i in range(self.nfreq)])
+            return np.stack([self.noise_map(idx, i, apply_mask=apply_mask)
+                             for i in range(self.nfreq)])
         if (isinstance(channel, bool) or not isinstance(channel, Integral)
                 or not 0 <= channel < self.nfreq):
             raise ValueError("channel must index an existing frequency")
         rng = np.random.default_rng(np.random.SeedSequence([idx, 1, int(channel)]))
-        return rng.normal(size=(3, self.npix)) * self._noise_sigma[channel, :, None]
+        noise = rng.normal(size=(3, self.npix)) * self._noise_sigma[channel, :, None]
+        if apply_mask and self.mask is not None:
+            noise *= self.mask
+        return noise
 
     def as_plancklens(self, channel=0, data_idx=0):
         """Expose one frequency to Plancklens; its index -1 maps to data_idx."""
@@ -240,13 +264,17 @@ class CMBMapLibrary:
 
     def hashdict(self):
         obs = self.obs
-        return {
+        result = {
             'sim_lib': 'CMBobs-v1', 'nside': obs.nside, 'lmax': obs.lmax,
             'channel': self.channel, 'data_idx': self.data_idx, 'Acb': obs.Acb,
             'nlevp': tuple(obs.nlevp), 'fwhm': tuple(obs.fwhm),
             'alpha': tuple(obs.alpha),
             'spectra': hashlib.sha256(obs.spectra.tobytes()).hexdigest(),
         }
+        # Keep existing full-sky cache hashes unchanged.
+        if obs.mask is not None:
+            result['mask'] = obs._mask_hash
+        return result
 
     def _map(self, idx):
         if isinstance(idx, bool) or not isinstance(idx, Integral):
