@@ -36,6 +36,15 @@ identities. The current isotropic filter is unchanged: masked reconstructions
 are diagnostics without a cut-sky response, mean-field subtraction, or
 mode-coupling correction. No automatic sky-fraction rescaling is applied.
 
+`test_masked_hilc_3freq.ipynb` performs HILC on three already-masked channels
+(90/150/220 GHz), with miscalibration angles 0.10/0.15/0.20 degrees. It uses
+the same field-2 mask at `nside=512`, with all harmonic limits at 1024.
+The exact masked noise is propagated through the HILC weights; its mean
+spectra enter reconstruction filtering. Four calibration simulations and
+four disjoint test simulations show weights, cleaned spectra, noise, and raw
+rotation power on log–log axes. The cleaned sky is not masked a second time;
+the cut-sky interpretation limits above still apply.
+
 ## Polarization rotation reconstruction
 
 Requires NumPy, healpy, CAMB (for the first spectra calculation), and a working
