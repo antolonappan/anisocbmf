@@ -1,4 +1,5 @@
 import pickle
+import hashlib
 from numbers import Integral
 from pathlib import Path
 
@@ -202,3 +203,47 @@ class CMBobs:
                 self._noise_sigma[channel, :, None]
             )
         return maps
+
+    def as_plancklens(self, channel=0, data_idx=0):
+        """Expose one frequency to Plancklens; its index -1 maps to data_idx."""
+        return CMBMapLibrary(self, channel, data_idx)
+
+
+class CMBMapLibrary:
+    """Single-frequency Plancklens map interface, following S4bird's adapter.
+
+    https://github.com/antolonappan/s4bird/blob/1e0cade60da958128518443c6ccaf21c63aaee26/simulation.py
+    data_idx identifies a simulation to treat as 'data' (-1). Use a separate
+    realization outside your Monte Carlo set when estimating biases.
+    """
+
+    def __init__(self, obs, channel=0, data_idx=0):
+        if (isinstance(channel, bool) or not isinstance(channel, Integral)
+                or not 0 <= channel < obs.nfreq):
+            raise ValueError("channel must index an existing frequency")
+        self.obs = obs
+        self.channel = int(channel)
+        self.data_idx = obs._validate_idx(data_idx)
+        self.nside = obs.nside
+
+    def hashdict(self):
+        obs = self.obs
+        return {
+            'sim_lib': 'CMBobs-v1', 'nside': obs.nside, 'lmax': obs.lmax,
+            'channel': self.channel, 'data_idx': self.data_idx, 'Acb': obs.Acb,
+            'nlevp': tuple(obs.nlevp), 'fwhm': tuple(obs.fwhm),
+            'alpha': tuple(obs.alpha),
+            'spectra': hashlib.sha256(obs.spectra.tobytes()).hexdigest(),
+        }
+
+    def _map(self, idx):
+        if isinstance(idx, bool) or not isinstance(idx, Integral):
+            raise ValueError("idx must be -1 or a nonnegative integer")
+        return self.obs.observedmap(self.data_idx if idx == -1 else idx)[self.channel]
+
+    def get_sim_tmap(self, idx):
+        return self._map(idx)[0]
+
+    def get_sim_pmap(self, idx):
+        maps = self._map(idx)
+        return maps[1], maps[2]
