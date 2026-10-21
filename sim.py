@@ -198,11 +198,23 @@ class CMBobs:
                     sky, fwhm=np.deg2rad(self.fwhm[channel] / 60),
                     pol=True, lmax=self.lmax,
                 )
-            rng = np.random.default_rng(np.random.SeedSequence([idx, 1, channel]))
-            maps[channel] = sky + rng.normal(size=(3, self.npix)) * (
-                self._noise_sigma[channel, :, None]
-            )
+            maps[channel] = sky + self.noise_map(idx, channel)
         return maps
+
+    def noise_map(self, idx, channel=None):
+        """Return the exact white noise added by observedmap, in uK.
+
+        Shape is (nfreq, 3, npix), or (3, npix) if channel is specified.
+        Noise is neither rotated nor beam-convolved.
+        """
+        idx = self._validate_idx(idx)
+        if channel is None:
+            return np.stack([self.noise_map(idx, i) for i in range(self.nfreq)])
+        if (isinstance(channel, bool) or not isinstance(channel, Integral)
+                or not 0 <= channel < self.nfreq):
+            raise ValueError("channel must index an existing frequency")
+        rng = np.random.default_rng(np.random.SeedSequence([idx, 1, int(channel)]))
+        return rng.normal(size=(3, self.npix)) * self._noise_sigma[channel, :, None]
 
     def as_plancklens(self, channel=0, data_idx=0):
         """Expose one frequency to Plancklens; its index -1 maps to data_idx."""

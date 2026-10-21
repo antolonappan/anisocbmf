@@ -36,7 +36,7 @@ nhl = rec.nhl_dd.get_sim_nhl(0, 'a_p', 'a_p')  # unnormalized
 elm_filtered = rec.ivfs.get_sim_elm(0)
 ```
 
-Use a separate `AlphaRecon` for each channel; this does not combine frequencies.
+Use a separate `AlphaRecon` for each channel, or pass the HILC combination below.
 `obs.as_plancklens(channel=0, data_idx=1000)` exposes `get_sim_tmap`,
 `get_sim_pmap`, and `hashdict` for use with other Plancklens filtering libraries.
 Index `-1` selects `data_idx`; nonnegative indices keep their original meaning.
@@ -51,6 +51,53 @@ correction is performed, and the semi-analytical noise is not a full RDN0
 pipeline. Cache configurations are checked by Plancklens; use a new `libdir`
 after changing parameters and do not mutate an observation after constructing
 its reconstruction libraries.
+
+## Harmonic ILC across frequencies
+
+```python
+from hilc import HILC
+
+cleaned = HILC(obs, libdir='./data/hilc', lmax=512, bin_width=20)
+teb = cleaned.cleaned_alms(0)        # (3, nalm), beam-deconvolved T/E/B
+weights = cleaned.weights(0)        # (3, lmax+1, 1, nfreq)
+noise = cleaned.noise_spectra(0)    # (3, lmax+1), residual TT/EE/BB in uK²
+
+# Fit filtering noise on an explicit ensemble, separate from reconstruction idx=0.
+noise_indices = range(100, 120)
+mean_noise = cleaned.mean_noise_spectra(noise_indices)
+rec = AlphaRecon(cleaned, libdir='./data/recon_hilc', noise_indices=noise_indices,
+                 lmin_ivf=30, lmax_ivf=512, lmax_qlm=256)
+alpha_lm = rec.reconstruct(0)
+```
+
+Following [COBI's HILC workflow](https://github.com/antolonappan/cobi/blob/0cbcb35e36f54266f9e5d5aab5456fd518bae83f/cobi/simulation/sky.py#L517),
+weights are fitted to observed alms and applied unchanged to the corresponding
+noise-only alms. `CMBobs.noise_map(idx)` returns exactly the noise added to its
+observation. Each frequency's polarized beam is deconvolved before combining;
+no pixel window is used. This implementation cleans T as well as E and B,
+using separate empirical covariance matrices and `(2l+1)`-weighted bins.
+Weights sum to one per field and multipole, with a regularized covariance
+pseudoinverse for singular inputs.
+
+`AlphaRecon` uses the arithmetic mean of the **noise powers**, not averaged
+noise alms or total sky power:
+
+```text
+ftl = 1 / (C_TT + mean_N_TT)
+fel = 1 / (C_EE + mean_N_EE)
+fbl = 1 / (C_BB + mean_N_BB)
+```
+
+Multipoles below `lmin_ivf` are zeroed. HILC alms go directly into Plancklens'
+harmonic filter with unit transfer functions, so beams are not removed twice.
+`rec.noise_cls` exposes the actual mean spectra used. HILC products (alms,
+weights, noise alms, noise spectra) are cached per simulation and configuration.
+Do not mutate the input observation after creating HILC.
+
+The unit-response constraint assumes the same calibrated CMB in each channel.
+Unequal miscalibration angles are retained, and empirically fitted weights can
+introduce ILC signal bias. Mean noise filtering does not by itself calibrate
+these effects; reconstruction validation should use the full cleaning pipeline.
 
 The noise library wrapper corrects versions of Plancklens whose `_get_cls`
 returns the spectrum length instead of the inclusive maximum multipole.
