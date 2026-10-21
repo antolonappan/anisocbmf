@@ -15,6 +15,12 @@ HILC weights, cleaned T/E/B and noise spectra, then rotation auto- and
 input cross-spectra. The mean filtering noise is estimated from a disjoint
 calibration ensemble. It uses CMB plus noise, without foregrounds.
 
+Rotation spectrum panels use raw `C_L` (no `L(L+1)/(2π)` factor) on log–log
+axes. Negative measured bands are explicitly marked as negative magnitudes.
+`test_hilc_random_angles.ipynb` repeats the four-frequency reconstruction with
+one fixed, seeded miscalibration angle per channel, drawn uniformly from
+0.1–0.2 degrees. It defaults to `nside=128` for a quick end-to-end run.
+
 ## Polarization rotation reconstruction
 
 Requires NumPy, healpy, CAMB (for the first spectra calculation), and a working
