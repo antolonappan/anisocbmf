@@ -10,6 +10,11 @@ control test of `AlphaRecon`, with input cross-spectra, auto-spectra, estimated
 N0, and a Wiener-filtered map comparison. Parameters are editable at the top;
 generated reconstruction caches stay under `data/`.
 
+`test_hilc_reconstruction.ipynb` demonstrates a toy four-frequency experiment:
+HILC weights, cleaned T/E/B and noise spectra, then rotation auto- and
+input cross-spectra. The mean filtering noise is estimated from a disjoint
+calibration ensemble. It uses CMB plus noise, without foregrounds.
+
 ## Polarization rotation reconstruction
 
 Requires NumPy, healpy, CAMB (for the first spectra calculation), and a working
