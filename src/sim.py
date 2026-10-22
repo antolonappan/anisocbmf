@@ -66,24 +66,22 @@ class CMBobs:
 
     Maps contain T, Q, U in uK in HEALPix RING order. The simulation uses
     lmax = min(3*nside - 1, 6000), with no pixel window applied.
-    mask may be a FITS path (mask_field=2 by default) or a RING HEALPix array.
+    mask is a RING HEALPix array.
     It is resampled to nside with hp.ud_grade (fractional edges retained)
     and multiplies all T/Q/U channels after beam convolution and noise.
     """
 
     def __init__(self, nside, nlevp, fwhm, alpha=None, Acb=0.0,
-                 mask=None, mask_field=2):
+                 mask=None):
         if (isinstance(nside, bool) or not isinstance(nside, Integral)
                 or not hp.isnsideok(nside)):
             raise ValueError("nside must be a valid positive HEALPix integer")
         self.nside = int(nside)
         self.npix = hp.nside2npix(self.nside)
         # Masks are dimensionless RING weights, applied only after the noise.
-        # FITS inputs are read in RING order; array inputs must already be RING.
         self.mask = None
         if mask is not None:
-            values = (hp.read_map(str(mask), field=mask_field, dtype=float)
-                      if isinstance(mask, (str, Path)) else np.asarray(mask, dtype=float))
+            values = np.asarray(mask, dtype=float)
             if (values.ndim != 1 or not hp.isnpixok(values.size)
                     or not np.isfinite(values).all() or np.any(values < 0)
                     or np.any(values > 1) or not np.any(values > 0)):

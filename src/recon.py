@@ -1,23 +1,27 @@
 
 from numbers import Integral
 from pathlib import Path
-import hashlib
 
 import healpy as hp
 import numpy as np
 
 
 class AlphaRecon:
-    """Isotropic filtering and the polarization-only rotation QE ('a_p').
+    """Inverse-variance filtering and the polarization-only rotation QE ('a_p').
 
-    obs is a CMBobs or HILC instance. For CMBobs, select a frequency with
-    channel. For HILC, supply noise_indices to average its cleaned TT/EE/BB
-    noise spectra for filtering; use a separate ensemble from your analysis.
+    obs is a CMBobs instance; select a frequency with channel.
+    With cinv=True (requires obs.mask), the maps are filtered with the
+    Plancklens conjugate-gradient filters (filt_cinv, as in
+    params/anisofilt_example.py) using inverse noise variance maps
+    proportional to the mask; otherwise the isotropic full-sky filter is used.
+    The cinv filters need lmax_ivf >= 1024 and nside >= 512.
     lmin_ivf/lmax_ivf select CMB modes and lmax_qlm selects
     reconstructed rotation modes. Cache directories must not be reused for
     different configurations (Plancklens checks their hashes).
 
     The fiducial model is the unrotated lensed CMB with homogeneous noise.
+    The response and noise estimate use the isotropic filter approximation
+    in both cases.
     The response is linear in small rotation, including any miscalibration;
     miscalibration is not removed. No mean field or N1 subtraction is done.
     """
@@ -26,13 +30,11 @@ class AlphaRecon:
 
     def __init__(self, obs, libdir='./data/alpha_recon', channel=0,
                  lmin_ivf=2, lmax_ivf=None, lmax_qlm=None, data_idx=0,
-                 noise_indices=None):
+                 cinv=False):
         from plancklens import nhl, qest, qresp, utils
-        from plancklens.filt import filt_simple
-      
+        from plancklens.filt import filt_cinv, filt_simple, filt_util
 
         self.obs = obs
-        is_hilc = False
         self.nside = obs.nside
         # Stay below the highest HEALPix modes by default.
         self.lmax_ivf = self._multipole(
@@ -44,56 +46,57 @@ class AlphaRecon:
             self.lmax_ivf if lmax_qlm is None else lmax_qlm,
             'lmax_qlm', 0, min(2 * self.lmax_ivf, 3 * obs.nside - 1),
         )
-        if is_hilc:
-            if noise_indices is None:
-                raise ValueError('HILC filtering requires explicit noise_indices')
-            self.noise_indices = tuple(obs.obs._validate_idx(i) for i in noise_indices)
-            self.sims = obs.as_plancklens(channel=channel, data_idx=data_idx,
-                                         lmax=self.lmax_ivf, harmonic=True)
-        else:
-            if noise_indices is not None:
-                raise ValueError('noise_indices applies only to HILC input')
-            self.noise_indices = None
-            self.sims = obs.as_plancklens(channel=channel, data_idx=data_idx)
+        if cinv and obs.mask is None:
+            raise ValueError('cinv filtering requires a masked CMBobs')
+        if cinv and (self.lmax_ivf < 1024 or obs.nside < 512):
+            raise ValueError('cinv filtering requires lmax_ivf >= 1024 and nside >= 512')
+        self.cinv = bool(cinv)
+        self.sims = obs.as_plancklens(channel=channel, data_idx=data_idx)
         self.channel = self.sims.channel
-        self.libdir = Path(libdir) / ('hilc' if is_hilc else f'freq_{self.channel}')
+        self.libdir = Path(libdir) / (f'freq_{self.channel}'
+                                      + ('_cinv' if self.cinv else ''))
         self.cl_len = {key: obs.spectra[:self.lmax_ivf + 1, i].copy()
                        for i, key in enumerate(('tt', 'ee', 'bb', 'te'))}
         # Keep lensed BB in ALL QE weights, including ivfs' Wiener leg.
         # Zeroing BB only in nhl/qresp would normalize a different estimator.
         self.cl_weight = {key: cl.copy() for key, cl in self.cl_len.items()}
-        if is_hilc:
-            mean_noise = obs.mean_noise_spectra(self.noise_indices)[:, :self.lmax_ivf + 1]
-            self.noise_cls = {key: mean_noise[i] for i, key in enumerate(('tt', 'ee', 'bb'))}
-            self.transf = {key: np.ones(self.lmax_ivf + 1) for key in ('t', 'e', 'b')}
-            # Strong hash: Plancklens' default float16 hashes lose precision
-            # for small noise powers and can overflow for large filters.
-            self.sims.filter_hash = hashlib.sha256(
-                mean_noise.tobytes() + repr(self.noise_indices).encode()
-            ).hexdigest()
-        else:
-            beam = hp.gauss_beam(np.deg2rad(obs.fwhm[self.channel] / 60),
-                                 lmax=self.lmax_ivf, pol=True)
-            self.transf = {key: beam[:, i] for i, key in enumerate(('t', 'e', 'b'))}
-            # No pixel window: CMBobs does not apply one.
-            nlev = {'t': obs.nlevt[self.channel],
-                    'e': obs.nlevp[self.channel], 'b': obs.nlevp[self.channel]}
-            if any(np.any(beam <= 0) for beam in self.transf.values()):
-                raise ValueError('Beam underflows in the selected multipole range')
-            self.noise_cls = {
-                key * 2: (nlev[key] * np.pi / (180 * 60) / self.transf[key])**2
-                for key in ('t', 'e', 'b')
-            }
+        beam = hp.gauss_beam(np.deg2rad(obs.fwhm[self.channel] / 60),
+                             lmax=self.lmax_ivf, pol=True)
+        self.transf = {key: beam[:, i] for i, key in enumerate(('t', 'e', 'b'))}
+        # No pixel window: CMBobs does not apply one.
+        nlev = {'t': obs.nlevt[self.channel],
+                'e': obs.nlevp[self.channel], 'b': obs.nlevp[self.channel]}
+        if any(np.any(beam <= 0) for beam in self.transf.values()):
+            raise ValueError('Beam underflows in the selected multipole range')
+        self.noise_cls = {
+            key * 2: (nlev[key] * np.pi / (180 * 60) / self.transf[key])**2
+            for key in ('t', 'e', 'b')
+        }
         filters = {}
         for key in ('t', 'e', 'b'):
             filters[key] = utils.cli(self.cl_len[key * 2] + self.noise_cls[key * 2])
             filters[key][:self.lmin_ivf] = 0
 
-        if is_hilc:
-            self.ivfs = filt_simple.library_fullsky_alms_sepTP(
-                str(self.libdir / 'ivfs'), self.sims, self.transf, self.cl_weight,
-                filters['t'], filters['e'], filters['b'], cache=True,
+        if self.cinv:
+            # Inverse pixel variance (1/uK^2) times the mask weights.
+            pix_arcmin2 = hp.nside2pixarea(self.nside, degrees=True) * 3600
+            ninv_t = [np.array([pix_arcmin2 / nlev['t']**2]), obs.mask]
+            ninv_p = [[np.array([pix_arcmin2 / nlev['e']**2]), obs.mask]]
+            cinv_t = filt_cinv.cinv_t(
+                str(self.libdir / 'cinv_t'), self.lmax_ivf, self.nside,
+                self.cl_len, self.transf['t'], ninv_t,
+                marge_monopole=True, marge_dipole=True, marge_maps=[],
             )
+            cinv_p = filt_cinv.cinv_p(
+                str(self.libdir / 'cinv_p'), self.lmax_ivf, self.nside,
+                self.cl_len, self.transf['e'], ninv_p, transf_blm=self.transf['b'],
+            )
+            ivfs_raw = filt_cinv.library_cinv_sepTP(
+                str(self.libdir / 'ivfs'), self.sims, cinv_t, cinv_p, self.cl_weight,
+            )
+            # Only the lmin cut; cinv already applies the inverse variance.
+            lcut = (np.arange(self.lmax_ivf + 1) >= self.lmin_ivf).astype(float)
+            self.ivfs = filt_util.library_ftl(ivfs_raw, self.lmax_ivf, lcut, lcut, lcut)
         else:
             self.ivfs = filt_simple.library_fullsky_sepTP(
                 str(self.libdir / 'ivfs'), self.sims, self.nside, self.transf,
