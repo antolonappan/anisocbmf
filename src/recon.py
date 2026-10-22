@@ -18,6 +18,9 @@ class AlphaRecon:
     lmin_ivf/lmax_ivf select CMB modes and lmax_qlm selects
     reconstructed rotation modes. Cache directories must not be reused for
     different configurations (Plancklens checks their hashes).
+    filter_libdir, if given, holds the cinv_t/cinv_p filter caches instead of
+    libdir. They depend only on the filter settings, so configurations that
+    differ only in alpha or Acb can share one directory.
 
     The fiducial model is the unrotated lensed CMB with homogeneous noise.
     The response and noise estimate use the isotropic filter approximation
@@ -30,7 +33,7 @@ class AlphaRecon:
 
     def __init__(self, obs, libdir='./data/alpha_recon', channel=0,
                  lmin_ivf=2, lmax_ivf=None, lmax_qlm=None, data_idx=0,
-                 cinv=False):
+                 cinv=False, filter_libdir=None):
         from plancklens import nhl, qest, qresp, utils
         from plancklens.filt import filt_cinv, filt_simple, filt_util
 
@@ -78,17 +81,19 @@ class AlphaRecon:
             filters[key][:self.lmin_ivf] = 0
 
         if self.cinv:
+            filtdir = (self.libdir if filter_libdir is None
+                       else Path(filter_libdir) / f'freq_{self.channel}_cinv')
             # Inverse pixel variance (1/uK^2) times the mask weights.
             pix_arcmin2 = hp.nside2pixarea(self.nside, degrees=True) * 3600
             ninv_t = [np.array([pix_arcmin2 / nlev['t']**2]), obs.mask]
             ninv_p = [[np.array([pix_arcmin2 / nlev['e']**2]), obs.mask]]
             cinv_t = filt_cinv.cinv_t(
-                str(self.libdir / 'cinv_t'), self.lmax_ivf, self.nside,
+                str(filtdir / 'cinv_t'), self.lmax_ivf, self.nside,
                 self.cl_len, self.transf['t'], ninv_t,
                 marge_monopole=True, marge_dipole=True, marge_maps=[],
             )
             cinv_p = filt_cinv.cinv_p(
-                str(self.libdir / 'cinv_p'), self.lmax_ivf, self.nside,
+                str(filtdir / 'cinv_p'), self.lmax_ivf, self.nside,
                 self.cl_len, self.transf['e'], ninv_p, transf_blm=self.transf['b'],
             )
             ivfs_raw = filt_cinv.library_cinv_sepTP(
@@ -144,6 +149,15 @@ class AlphaRecon:
         return hp.almxfl(qlm, self.normalization())
 
     def noise_spectrum(self, idx):
-        """Normalized semi-analytical disconnected noise estimate in rad^2."""
-        return (self.nhl_dd.get_sim_nhl(idx, self.key, self.key)
-                * self.normalization()**2)
+        """Normalized semi-analytical disconnected noise estimate in rad^2.
+
+        Same as nhl_dd.get_sim_nhl, but not cached: its shared SQLite cache
+        loses concurrent writes from many MPI ranks on network filesystems.
+        """
+        from plancklens import nhl, qresp
+        _, gc, spins, _ = qresp.qe_spin_data(self.key)
+        cls, lmax_ivf = self.nhl_dd._get_cls(idx, np.unique(spins))
+        gg, cc, gc_, cg = nhl.get_nhl(self.key, self.key, self.cl_weight, cls,
+                                      lmax_ivf, lmax_ivf, lmax_out=self.lmax_qlm)
+        n0 = {'GG': gg, 'CC': cc, 'GC': gc_, 'CG': cg}[gc + gc]
+        return n0 * self.normalization()**2
