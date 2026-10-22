@@ -1,8 +1,3 @@
-"""Full-sky polarization rotation reconstruction using Plancklens.
-
-Adapted from params/idealized_example.py and examples/lensingrec_quickstart.ipynb
-at https://github.com/carronj/plancklens .
-"""
 
 from numbers import Integral
 from pathlib import Path
@@ -34,10 +29,10 @@ class AlphaRecon:
                  noise_indices=None):
         from plancklens import nhl, qest, qresp, utils
         from plancklens.filt import filt_simple
-        from hilc import HILC
+      
 
         self.obs = obs
-        is_hilc = isinstance(obs, HILC)
+        is_hilc = False
         self.nside = obs.nside
         # Stay below the highest HEALPix modes by default.
         self.lmax_ivf = self._multipole(
